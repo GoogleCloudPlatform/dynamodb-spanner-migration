@@ -135,6 +135,7 @@ public class SpannerStreamingWrite {
             Mutation.WriteBuilder mutation = Mutation.newReplaceBuilder(table);
 
             try {
+                // [START mapping]
                 mutation.set("Username").to(item.Username.S);
 
                 Optional.ofNullable(item.Zipcode).ifPresent(x->{
@@ -152,6 +153,7 @@ public class SpannerStreamingWrite {
                 Optional.ofNullable(item.PointsEarned).ifPresent(x->{
                     mutation.set("PointsEarned").to(Integer.parseInt(x.N));
                 });
+                // [END mapping]
 
 
                 c.output(mutation.build());
@@ -223,6 +225,7 @@ public class SpannerStreamingWrite {
 
 
     // JSON mapping item to object
+    // [START GSON]
     public static class Item implements Serializable {
         private Username Username;
         private PointsEarned PointsEarned;
@@ -256,6 +259,7 @@ public class SpannerStreamingWrite {
         private String N;
 
     }
+    // [END GSON]
 
 
 }
