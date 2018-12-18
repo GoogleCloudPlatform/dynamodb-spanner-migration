@@ -47,11 +47,12 @@ import java.util.Optional;
 mvn clean
 mvn compile
 mvn exec:java \
-    -Dexec.mainClass=com.example.spanner_migration.SpannerBulkWrite \
-    -Dexec.args="--project=my-project-id \
+    -Dexec.mainClass=com.example.spanner_migration.SpannerStreamingWrite \
+    -Dexec.args="--project=$GOOGLE_CLOUD_PROJECT \
                  --instanceId=my-instance-id \
                  --databaseId=my-database-id \
                  --table=my-table \
+                 --experiments=allow_non_updatable_job \
                  --subscription=my-pubsub-subscription"
 */
 

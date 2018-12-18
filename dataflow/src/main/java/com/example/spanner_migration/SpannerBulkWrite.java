@@ -110,6 +110,7 @@ public class SpannerBulkWrite {
           Mutation.WriteBuilder mutation = Mutation.newInsertOrUpdateBuilder(table);
 
           try {
+              // [START mapping]
               mutation.set("Username").to(item.Username.s);
 
               Optional.ofNullable(item.Zipcode).ifPresent(x->{
@@ -127,6 +128,7 @@ public class SpannerBulkWrite {
               Optional.ofNullable(item.PointsEarned).ifPresent(x->{
                   mutation.set("PointsEarned").to(Integer.parseInt(x.n));
               });
+              // [END mapping]
 
 
               c.output(mutation.build());
@@ -178,6 +180,7 @@ public class SpannerBulkWrite {
 
 
     // JSON mapping item to object
+    // [START GSON]
     public static class Item implements Serializable {
         private Username Username;
         private PointsEarned PointsEarned;
@@ -211,6 +214,7 @@ public class SpannerBulkWrite {
         private String n;
 
     }
+    // [END GSON]
 
 
 }
