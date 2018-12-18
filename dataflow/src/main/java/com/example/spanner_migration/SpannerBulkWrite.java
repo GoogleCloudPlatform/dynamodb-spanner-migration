@@ -20,6 +20,7 @@ import com.google.cloud.Date;
 import com.google.cloud.spanner.Mutation;
 import com.google.gson.Gson;
 import org.apache.beam.runners.dataflow.DataflowRunner;
+import org.apache.beam.runners.direct.DirectRunner;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.TextIO;
 import org.apache.beam.sdk.io.gcp.spanner.SpannerIO;
@@ -145,7 +146,7 @@ public class SpannerBulkWrite {
 
     // file pattern to only grab data export files (which contain dashes in filename)
     // and ignore export job metadata files ("_SUCCESS" and "manifest")
-    String inputFiles = "gs://" + options.getBucket() + "/*/*-*";
+    String inputFiles = "gs://" + options.getImportBucket() + "/*/*-*";
 
 
     // (Source) read DynamoDB items from export files
