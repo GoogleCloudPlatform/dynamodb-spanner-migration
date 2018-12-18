@@ -47,7 +47,8 @@ mvn exec:java \
                  --instanceId=my-instance-id \
                  --databaseId=my-database-id \
                  --table=my-table \
-                 --bucket=my-import-bucket"
+                 --importBucket=my-import-bucket \
+                 --runner=dataflow"
 */
 
 @SuppressWarnings("serial")
