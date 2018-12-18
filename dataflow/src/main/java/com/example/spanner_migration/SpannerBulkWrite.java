@@ -166,10 +166,10 @@ public class SpannerBulkWrite {
           .withDatabaseId(options.getDatabaseId()));
 
     if (options.getRunner() == DirectRunner.class) {
-      p.run().waitUntilFinish()
+      p.run().waitUntilFinish();
     }
     else {
-      p.run()
+      p.run();
     }
 
   }
