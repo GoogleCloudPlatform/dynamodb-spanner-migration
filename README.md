@@ -5,7 +5,7 @@ This solution walks you through the process of migrating from DynamoDB to Cloud 
 
 
 The guide can be found at:
-https://coud.google.com/solutions/migration/migrating-dynamodb-to-cloud-spanner
+https://cloud.google.com/solutions/migration/migrating-dynamodb-to-cloud-spanner
 
 
 
