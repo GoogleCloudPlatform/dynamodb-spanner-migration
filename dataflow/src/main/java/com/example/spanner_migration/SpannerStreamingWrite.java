@@ -22,7 +22,6 @@ import com.google.cloud.spanner.Mutation;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import org.apache.beam.runners.dataflow.DataflowRunner;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
 import org.apache.beam.sdk.io.gcp.spanner.SpannerIO;
@@ -58,7 +57,7 @@ mvn exec:java \
 
 @SuppressWarnings("serial")
 public class SpannerStreamingWrite {
-    private static final Logger LOG = LoggerFactory.getLogger(SpannerBulkWrite.class);
+    private static final Logger LOG = LoggerFactory.getLogger(SpannerStreamingWrite.class);
 
     public interface Options extends PipelineOptions {
 
@@ -100,7 +99,7 @@ public class SpannerStreamingWrite {
     static class UpdateItems extends DoFn<String, Item> {
         @ProcessElement
         public void processElement(ProcessContext c) {
-            JsonObject json = new JsonParser().parse(c.element()).getAsJsonObject();
+            JsonObject json = new JsonParser.parseString​(c.element()).getAsJsonObject();
             if(json.has("NewImage")) {
                 LOG.info("received a create/update");
                 c.output(new Gson().fromJson(json.getAsJsonObject("NewImage"), Item.class));
@@ -111,7 +110,7 @@ public class SpannerStreamingWrite {
     static class DeleteItems extends DoFn<String, Item> {
         @ProcessElement
         public void processElement(ProcessContext c) {
-            JsonObject json = new JsonParser().parse(c.element()).getAsJsonObject();
+            JsonObject json = new JsonParser.parseString​(c.element()).getAsJsonObject();
             if(!json.has("NewImage")) {
                 LOG.info("received a delete");
                 c.output(new Gson().fromJson(json.getAsJsonObject("Keys"), Item.class));
@@ -180,7 +179,7 @@ public class SpannerStreamingWrite {
         public void processElement(ProcessContext c) {
             Item item = c.element();
             LOG.info("Creating delete mutation for " + item.Username.S);
-            Mutation mutation = Mutation.delete(table, Key.of(item.Username.S));
+            Mutation mutation = Mutation.delete(table, com.google.cloud.spanner.Key.of(item.Username.S));
             c.output(mutation);
         }
 
@@ -188,7 +187,6 @@ public class SpannerStreamingWrite {
 
     public static void main(String[] args) {
         Options options = PipelineOptionsFactory.fromArgs(args).withValidation().as(Options.class);
-        options.setRunner(DataflowRunner.class); // run on Cloud Dataflow or comment out to run locally
 
         Pipeline p = Pipeline.create(options);
 

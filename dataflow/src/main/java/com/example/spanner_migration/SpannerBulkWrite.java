@@ -19,8 +19,6 @@ package com.example.spanner_migration;
 import com.google.cloud.Date;
 import com.google.cloud.spanner.Mutation;
 import com.google.gson.Gson;
-import org.apache.beam.runners.dataflow.DataflowRunner;
-import org.apache.beam.runners.direct.DirectRunner;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.TextIO;
 import org.apache.beam.sdk.io.gcp.spanner.SpannerIO;
@@ -169,12 +167,7 @@ public class SpannerBulkWrite {
           .withInstanceId(options.getInstanceId())
           .withDatabaseId(options.getDatabaseId()));
 
-    if (options.getRunner() == DirectRunner.class) {
-      p.run().waitUntilFinish();
-    }
-    else {
-      p.run();
-    }
+    p.run().waitUntilFinish();
 
   }
 
