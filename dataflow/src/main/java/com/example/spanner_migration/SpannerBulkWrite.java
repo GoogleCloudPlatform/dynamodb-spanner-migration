@@ -16,6 +16,8 @@
 
 package com.example.spanner_migration;
 
+import static org.apache.beam.sdk.io.Compression.GZIP;
+
 import com.google.cloud.Date;
 import com.google.cloud.spanner.Mutation;
 import com.google.gson.Gson;
@@ -85,16 +87,16 @@ public class SpannerBulkWrite {
 
   }
 
-  static class ParseItems extends DoFn<String, Item> {
+  static class ParseItems extends DoFn<String, Record> {
 
     @ProcessElement
     public void processElement(ProcessContext c) {
-      c.output(new Gson().fromJson(c.element(), Item.class));
+      c.output(new Gson().fromJson(c.element(), Record.class));
       //In a production system, you should use a dead letter queue
     }
   }
 
-  static class CreateItemMutations extends DoFn<Item, Mutation> {
+  static class CreateItemMutations extends DoFn<Record, Mutation> {
 
     String table;
 
@@ -104,28 +106,28 @@ public class SpannerBulkWrite {
 
     @ProcessElement
     public void processElement(ProcessContext c) {
-      Item item = c.element();
+      Record record = c.element();
 
       Mutation.WriteBuilder mutation = Mutation.newInsertOrUpdateBuilder(table);
 
       try {
         // [START mapping]
-        mutation.set("Username").to(item.Username.s);
+        mutation.set("Username").to(record.Item.Username.S);
 
-        Optional.ofNullable(item.Zipcode).ifPresent(x -> {
-          mutation.set("Zipcode").to(Integer.parseInt(x.n));
+        Optional.ofNullable(record.Item.Zipcode).ifPresent(x -> {
+          mutation.set("Zipcode").to(Integer.parseInt(x.N));
         });
 
-        Optional.ofNullable(item.Subscribed).ifPresent(x -> {
-          mutation.set("Subscribed").to(Boolean.parseBoolean(x.bOOL));
+        Optional.ofNullable(record.Item.Subscribed).ifPresent(x -> {
+          mutation.set("Subscribed").to(Boolean.parseBoolean(x.BOOL));
         });
 
-        Optional.ofNullable(item.ReminderDate).ifPresent(x -> {
-          mutation.set("ReminderDate").to(Date.parseDate(x.s));
+        Optional.ofNullable(record.Item.ReminderDate).ifPresent(x -> {
+          mutation.set("ReminderDate").to(Date.parseDate(x.S));
         });
 
-        Optional.ofNullable(item.PointsEarned).ifPresent(x -> {
-          mutation.set("PointsEarned").to(Integer.parseInt(x.n));
+        Optional.ofNullable(record.Item.PointsEarned).ifPresent(x -> {
+          mutation.set("PointsEarned").to(Integer.parseInt(x.N));
         });
         // [END mapping]
 
@@ -143,14 +145,15 @@ public class SpannerBulkWrite {
     Pipeline p = Pipeline.create(options);
 
     // file pattern to only grab data export files (which contain dashes in filename)
-    // and ignore export job metadata files ("_SUCCESS" and "manifest")
-    String inputFiles = "gs://" + options.getImportBucket() + "/*/*-*";
+    // and ignore export job metadata files
+    String inputFiles = "gs://" + options.getImportBucket() + "/**/*.json.gz";
 
     // (Source) read DynamoDB items from export files
-    PCollection<String> input = p.apply("ReadItems", TextIO.read().from(inputFiles));
+    PCollection<String> input = p.apply("ReadItems",
+        TextIO.read().from(inputFiles).withCompression(GZIP));
 
     // Parse the items into objects
-    PCollection<Item> items = input.apply("ParseItems", ParDo.of(new ParseItems()));
+    PCollection<Record> items = input.apply("ParseItems", ParDo.of(new ParseItems()));
 
     // Create Cloud Spanner mutations using parsed Item objects
     PCollection<Mutation> mutations = items.apply("CreateItemMutations",
@@ -167,6 +170,12 @@ public class SpannerBulkWrite {
 
   // JSON mapping item to object
   // [START GSON]
+  public static class Record implements Serializable {
+
+    private Item Item;
+
+  }
+
   public static class Item implements Serializable {
 
     private Username Username;
@@ -179,31 +188,31 @@ public class SpannerBulkWrite {
 
   public static class Username implements Serializable {
 
-    private String s;
+    private String S;
 
   }
 
   public static class PointsEarned implements Serializable {
 
-    private String n;
+    private String N;
 
   }
 
   public static class Subscribed implements Serializable {
 
-    private String bOOL;
+    private String BOOL;
 
   }
 
   public static class ReminderDate implements Serializable {
 
-    private String s;
+    private String S;
 
   }
 
   public static class Zipcode implements Serializable {
 
-    private String n;
+    private String N;
 
   }
   // [END GSON]
