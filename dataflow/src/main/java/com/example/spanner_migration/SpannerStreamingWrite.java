@@ -17,15 +17,20 @@
 package com.example.spanner_migration;
 
 import com.google.cloud.Date;
-import com.google.cloud.spanner.Key;
 import com.google.cloud.spanner.Mutation;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import java.io.Serializable;
+import java.util.Optional;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
 import org.apache.beam.sdk.io.gcp.spanner.SpannerIO;
-import org.apache.beam.sdk.options.*;
+import org.apache.beam.sdk.options.Default;
+import org.apache.beam.sdk.options.Description;
+import org.apache.beam.sdk.options.PipelineOptions;
+import org.apache.beam.sdk.options.PipelineOptionsFactory;
+import org.apache.beam.sdk.options.Validation;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.Flatten;
 import org.apache.beam.sdk.transforms.ParDo;
@@ -37,9 +42,6 @@ import org.joda.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.Serializable;
-import java.util.Optional;
-
 
 /*
 ## How to run
@@ -47,218 +49,226 @@ mvn clean
 mvn compile
 mvn exec:java \
     -Dexec.mainClass=com.example.spanner_migration.SpannerStreamingWrite \
+    -Pdataflow-runner \
     -Dexec.args="--project=$GOOGLE_CLOUD_PROJECT \
                  --instanceId=my-instance-id \
                  --databaseId=my-database-id \
                  --table=my-table \
                  --experiments=allow_non_updatable_job \
-                 --subscription=my-pubsub-subscription"
+                 --subscription=my-pubsub-subscription
+                 --runner=DataflowRunner \
+                 --region=your-gcp-region"
 */
 
 @SuppressWarnings("serial")
 public class SpannerStreamingWrite {
-    private static final Logger LOG = LoggerFactory.getLogger(SpannerStreamingWrite.class);
 
-    public interface Options extends PipelineOptions {
+  private static final Logger LOG = LoggerFactory.getLogger(SpannerStreamingWrite.class);
 
-        @Description("Spanner instance ID to write to")
-        @Validation.Required
-        String getInstanceId();
+  public interface Options extends PipelineOptions {
 
-        void setInstanceId(String value);
+    @Description("Spanner instance ID to write to")
+    @Validation.Required
+    String getInstanceId();
 
-
-        @Description("Spanner database name to write to")
-        @Validation.Required
-        String getDatabaseId();
-
-        void setDatabaseId(String value);
+    void setInstanceId(String value);
 
 
-        @Description("Spanner table name to write to")
-        @Validation.Required
-        String getTable();
+    @Description("Spanner database name to write to")
+    @Validation.Required
+    String getDatabaseId();
 
-        void setTable(String value);
+    void setDatabaseId(String value);
+
+    @Description("Spanner table name to write to")
+    @Validation.Required
+    String getTable();
+
+    void setTable(String value);
 
 
-        @Description("Pub/Sub Subscription with streaming changes (full subscription path reqd")
-        @Validation.Required
-        String getSubscription();
+    @Description("Pub/Sub Subscription with streaming changes (full subscription path reqd")
+    @Validation.Required
+    String getSubscription();
 
-        void setSubscription(String value);
+    void setSubscription(String value);
 
-        @Description("How often to process the window (s)")
-        @Default.String("60")
-        String getWindow();
+    @Description("How often to process the window (s)")
+    @Default.String("60")
+    String getWindow();
 
-        void setWindow(String value);
+    void setWindow(String value);
+
+  }
+
+  static class UpdateItems extends DoFn<String, Item> {
+
+    @ProcessElement
+    public void processElement(ProcessContext c) {
+      JsonObject json = JsonParser.parseString(c.element()).getAsJsonObject();
+      if (json.has("NewImage")) {
+        LOG.info("received a create/update");
+        c.output(new Gson().fromJson(json.getAsJsonObject("NewImage"), Item.class));
+      }
+    }
+  }
+
+  static class DeleteItems extends DoFn<String, Item> {
+
+    @ProcessElement
+    public void processElement(ProcessContext c) {
+      JsonObject json = JsonParser.parseString(c.element()).getAsJsonObject();
+      if (!json.has("NewImage")) {
+        LOG.info("received a delete");
+        c.output(new Gson().fromJson(json.getAsJsonObject("Keys"), Item.class));
+      }
+    }
+  }
+
+  static class UpdateMutations extends DoFn<Item, Mutation> {
+
+    String table;
+
+    public UpdateMutations(String table) {
+      this.table = table;
+    }
+
+    @ProcessElement
+    public void processElement(ProcessContext c) {
+      Item item = c.element();
+      LOG.info("Creating new/update Mutation for " + item.Username.S);
+      Mutation.WriteBuilder mutation = Mutation.newReplaceBuilder(table);
+
+      try {
+        // [START mapping]
+        mutation.set("Username").to(item.Username.S);
+
+        Optional.ofNullable(item.Zipcode).ifPresent(x -> {
+          mutation.set("Zipcode").to(Integer.parseInt(x.N));
+        });
+
+        Optional.ofNullable(item.Subscribed).ifPresent(x -> {
+          mutation.set("Subscribed").to(Boolean.parseBoolean(x.BOOL));
+        });
+
+        Optional.ofNullable(item.ReminderDate).ifPresent(x -> {
+          mutation.set("ReminderDate").to(Date.parseDate(x.S));
+        });
+
+        Optional.ofNullable(item.PointsEarned).ifPresent(x -> {
+          mutation.set("PointsEarned").to(Integer.parseInt(x.N));
+        });
+        // [END mapping]
+
+        c.output(mutation.build());
+
+      } catch (Exception ex) {
+        LOG.error("Unable to create mutation", ex);
+      }
 
     }
 
-    static class UpdateItems extends DoFn<String, Item> {
-        @ProcessElement
-        public void processElement(ProcessContext c) {
-            JsonObject json = new JsonParser.parseString​(c.element()).getAsJsonObject();
-            if(json.has("NewImage")) {
-                LOG.info("received a create/update");
-                c.output(new Gson().fromJson(json.getAsJsonObject("NewImage"), Item.class));
-            }
-        }
+  }
+
+
+  static class DeleteMutations extends DoFn<Item, Mutation> {
+
+    String table;
+
+    public DeleteMutations(String table) {
+      this.table = table;
     }
 
-    static class DeleteItems extends DoFn<String, Item> {
-        @ProcessElement
-        public void processElement(ProcessContext c) {
-            JsonObject json = new JsonParser.parseString​(c.element()).getAsJsonObject();
-            if(!json.has("NewImage")) {
-                LOG.info("received a delete");
-                c.output(new Gson().fromJson(json.getAsJsonObject("Keys"), Item.class));
-            }
-        }
+    @ProcessElement
+    public void processElement(ProcessContext c) {
+      Item item = c.element();
+      LOG.info("Creating delete mutation for " + item.Username.S);
+      Mutation mutation = Mutation.delete(table, com.google.cloud.spanner.Key.of(item.Username.S));
+      c.output(mutation);
     }
 
+  }
+
+  public static void main(String[] args) {
+    Options options = PipelineOptionsFactory.fromArgs(args).withValidation().as(Options.class);
+
+    Pipeline p = Pipeline.create(options);
+
+    // Streaming pipeline, provide full subscription path
+    PCollection<String> messages = p
+        .apply("Reading from PubSub",
+            PubsubIO.readStrings().fromSubscription(options.getSubscription()));
+
+    // Choose Update Type
+    // create mutations for creates and updates
+    PCollection<Mutation> updates = messages.apply("Create-or-Update?", ParDo.of(new UpdateItems()))
+        .apply("CU->Mutations", ParDo.of(new UpdateMutations(options.getTable())));
+    // create mutations for deletes
+    PCollection<Mutation> deletes = messages.apply("Delete?", ParDo.of(new DeleteItems()))
+        .apply("D->Mutations", ParDo.of(new DeleteMutations(options.getTable())));
+
+    // Merge both sets of mutations
+    PCollectionList<Mutation> merged = PCollectionList.of(updates).and(deletes);
+
+    // Create fixed windows on unbounded (pub/sub) source
+    PCollection<Mutation> mergedWindowed = merged.apply("Merging Mutations",
+            Flatten.<Mutation>pCollections())
+        .apply("Creating Windows", Window.<Mutation>into(
+            FixedWindows.of(Duration.standardSeconds(Long.parseLong(options.getWindow())))));
+
+    // commit changes to Spanner
+    mergedWindowed.apply("Commit->Spanner", SpannerIO.write()
+        .withInstanceId(options.getInstanceId())
+        .withDatabaseId(options.getDatabaseId()));
+
+    //p.run().waitUntilFinish(); //needed when running local
+    p.run(); //when using Cloud Dataflow runner
+
+  }
 
 
-    static class UpdateMutations extends DoFn<Item, Mutation> {
+  // JSON mapping item to object
+  // [START GSON]
+  public static class Item implements Serializable {
 
-        String table;
+    private Username Username;
+    private PointsEarned PointsEarned;
+    private Subscribed Subscribed;
+    private ReminderDate ReminderDate;
+    private Zipcode Zipcode;
 
-        public UpdateMutations(String table) {
-            this.table = table;
-        }
+  }
 
-        @ProcessElement
-        public void processElement(ProcessContext c) {
-            Item item = c.element();
-            LOG.info("Creating new/update Mutation for " + item.Username.S);
-            Mutation.WriteBuilder mutation = Mutation.newReplaceBuilder(table);
+  public static class Username implements Serializable {
 
-            try {
-                // [START mapping]
-                mutation.set("Username").to(item.Username.S);
+    private String S;
 
-                Optional.ofNullable(item.Zipcode).ifPresent(x->{
-                    mutation.set("Zipcode").to(Integer.parseInt(x.N));
-                });
+  }
 
-                Optional.ofNullable(item.Subscribed).ifPresent(x->{
-                    mutation.set("Subscribed").to(Boolean.parseBoolean(x.BOOL));
-                });
+  public static class PointsEarned implements Serializable {
 
-                Optional.ofNullable(item.ReminderDate).ifPresent(x->{
-                    mutation.set("ReminderDate").to(Date.parseDate(x.S));
-                });
+    private String N;
 
-                Optional.ofNullable(item.PointsEarned).ifPresent(x->{
-                    mutation.set("PointsEarned").to(Integer.parseInt(x.N));
-                });
-                // [END mapping]
+  }
 
+  public static class Subscribed implements Serializable {
 
-                c.output(mutation.build());
+    private String BOOL;
 
-            } catch (Exception ex) {
-                LOG.error("Unable to create mutation", ex);
-            }
+  }
 
-        }
+  public static class ReminderDate implements Serializable {
 
-    }
+    private String S;
 
+  }
 
-    static class DeleteMutations extends DoFn<Item, Mutation> {
+  public static class Zipcode implements Serializable {
 
-        String table;
+    private String N;
 
-        public DeleteMutations(String table) {
-            this.table = table;
-        }
-
-        @ProcessElement
-        public void processElement(ProcessContext c) {
-            Item item = c.element();
-            LOG.info("Creating delete mutation for " + item.Username.S);
-            Mutation mutation = Mutation.delete(table, com.google.cloud.spanner.Key.of(item.Username.S));
-            c.output(mutation);
-        }
-
-    }
-
-    public static void main(String[] args) {
-        Options options = PipelineOptionsFactory.fromArgs(args).withValidation().as(Options.class);
-
-        Pipeline p = Pipeline.create(options);
-
-        // Streaming pipeline, provide full subscription path
-        PCollection<String> messages = p
-            .apply("Reading from PubSub",PubsubIO.readStrings().fromSubscription(options.getSubscription()));
-
-
-        // Choose Update Type
-        // create mutations for creates and updates
-        PCollection<Mutation> updates = messages.apply("Create-or-Update?", ParDo.of(new UpdateItems()))
-                .apply("CU->Mutations", ParDo.of(new UpdateMutations(options.getTable())));
-        // create mutations for deletes
-        PCollection<Mutation> deletes = messages.apply("Delete?", ParDo.of(new DeleteItems()))
-                .apply("D->Mutations", ParDo.of(new DeleteMutations(options.getTable())));
-
-        // Merge both sets of mutations
-        PCollectionList<Mutation> merged = PCollectionList.of(updates).and(deletes);
-
-        // Create fixed windows on unbounded (pub/sub) source
-        PCollection<Mutation> mergedWindowed = merged.apply("Merging Mutations", Flatten.<Mutation>pCollections())
-                .apply("Creating Windows",Window.<Mutation>into(FixedWindows.of(Duration.standardSeconds(Long.parseLong(options.getWindow())))));
-
-        // commit changes to Spanner
-        mergedWindowed.apply("Commit->Spanner", SpannerIO.write()
-                .withInstanceId(options.getInstanceId())
-                .withDatabaseId(options.getDatabaseId()));
-
-
-        //p.run().waitUntilFinish(); //needed when running local
-        p.run(); //when using Cloud Dataflow runner
-
-    }
-
-
-
-    // JSON mapping item to object
-    // [START GSON]
-    public static class Item implements Serializable {
-        private Username Username;
-        private PointsEarned PointsEarned;
-        private Subscribed Subscribed;
-        private ReminderDate ReminderDate;
-        private Zipcode Zipcode;
-
-    }
-
-    public static class Username implements Serializable {
-        private String S;
-
-    }
-
-    public static class PointsEarned implements Serializable {
-        private String N;
-
-    }
-
-    public static class Subscribed implements Serializable {
-        private String BOOL;
-
-    }
-
-    public static class ReminderDate implements Serializable {
-        private String S;
-
-    }
-
-    public static class Zipcode implements Serializable {
-        private String N;
-
-    }
-    // [END GSON]
+  }
+  // [END GSON]
 
 
 }

@@ -19,6 +19,8 @@ package com.example.spanner_migration;
 import com.google.cloud.Date;
 import com.google.cloud.spanner.Mutation;
 import com.google.gson.Gson;
+import java.io.Serializable;
+import java.util.Optional;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.TextIO;
 import org.apache.beam.sdk.io.gcp.spanner.SpannerIO;
@@ -31,8 +33,6 @@ import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.values.PCollection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import java.io.Serializable;
-import java.util.Optional;
 
 
 /*
@@ -41,16 +41,19 @@ mvn clean
 mvn compile
 mvn exec:java \
     -Dexec.mainClass=com.example.spanner_migration.SpannerBulkWrite \
+    -Pdataflow-runner \
     -Dexec.args="--project=my-project-id \
                  --instanceId=my-instance-id \
                  --databaseId=my-database-id \
                  --table=my-table \
                  --importBucket=my-import-bucket \
-                 --runner=dataflow"
+                 --runner=DataflowRunner \
+                 --region=your-gcp-region"
 */
 
 @SuppressWarnings("serial")
 public class SpannerBulkWrite {
+
   private static final Logger LOG = LoggerFactory.getLogger(SpannerBulkWrite.class);
 
   public interface Options extends PipelineOptions {
@@ -67,7 +70,6 @@ public class SpannerBulkWrite {
 
     void setDatabaseId(String value);
 
-
     @Description("Spanner table name to write to")
     @Validation.Required
     String getTable();
@@ -83,62 +85,57 @@ public class SpannerBulkWrite {
 
   }
 
+  static class ParseItems extends DoFn<String, Item> {
 
+    @ProcessElement
+    public void processElement(ProcessContext c) {
+      c.output(new Gson().fromJson(c.element(), Item.class));
+      //In a production system, you should use a dead letter queue
+    }
+  }
 
-    static class ParseItems extends DoFn<String, Item> {
-      @ProcessElement
-      public void processElement(ProcessContext c) {
-          c.output(new Gson().fromJson(c.element(), Item.class));
-          //In a production system, you should use a dead letter queue
-      }
+  static class CreateItemMutations extends DoFn<Item, Mutation> {
+
+    String table;
+
+    public CreateItemMutations(String table) {
+      this.table = table;
     }
 
-    static class CreateItemMutations extends DoFn<Item, Mutation> {
+    @ProcessElement
+    public void processElement(ProcessContext c) {
+      Item item = c.element();
 
-      String table;
+      Mutation.WriteBuilder mutation = Mutation.newInsertOrUpdateBuilder(table);
 
-      public CreateItemMutations(String table) {
-          this.table = table;
+      try {
+        // [START mapping]
+        mutation.set("Username").to(item.Username.s);
+
+        Optional.ofNullable(item.Zipcode).ifPresent(x -> {
+          mutation.set("Zipcode").to(Integer.parseInt(x.n));
+        });
+
+        Optional.ofNullable(item.Subscribed).ifPresent(x -> {
+          mutation.set("Subscribed").to(Boolean.parseBoolean(x.bOOL));
+        });
+
+        Optional.ofNullable(item.ReminderDate).ifPresent(x -> {
+          mutation.set("ReminderDate").to(Date.parseDate(x.s));
+        });
+
+        Optional.ofNullable(item.PointsEarned).ifPresent(x -> {
+          mutation.set("PointsEarned").to(Integer.parseInt(x.n));
+        });
+        // [END mapping]
+
+        c.output(mutation.build());
+
+      } catch (Exception ex) {
+        LOG.error("Unable to create mutation", ex);
       }
-
-      @ProcessElement
-      public void processElement(ProcessContext c) {
-          Item item = c.element();
-
-          Mutation.WriteBuilder mutation = Mutation.newInsertOrUpdateBuilder(table);
-
-          try {
-              // [START mapping]
-              mutation.set("Username").to(item.Username.s);
-
-              Optional.ofNullable(item.Zipcode).ifPresent(x->{
-                  mutation.set("Zipcode").to(Integer.parseInt(x.n));
-              });
-
-              Optional.ofNullable(item.Subscribed).ifPresent(x->{
-                  mutation.set("Subscribed").to(Boolean.parseBoolean(x.bOOL));
-              });
-
-              Optional.ofNullable(item.ReminderDate).ifPresent(x->{
-                  mutation.set("ReminderDate").to(Date.parseDate(x.s));
-              });
-
-              Optional.ofNullable(item.PointsEarned).ifPresent(x->{
-                  mutation.set("PointsEarned").to(Integer.parseInt(x.n));
-              });
-              // [END mapping]
-
-
-              c.output(mutation.build());
-
-          } catch (Exception ex) {
-              LOG.error("Unable to create mutation", ex);
-          }
-
-      }
-
     }
-
+  }
 
   public static void main(String[] args) {
     Options options = PipelineOptionsFactory.fromArgs(args).withValidation().as(Options.class);
@@ -149,65 +146,65 @@ public class SpannerBulkWrite {
     // and ignore export job metadata files ("_SUCCESS" and "manifest")
     String inputFiles = "gs://" + options.getImportBucket() + "/*/*-*";
 
-
     // (Source) read DynamoDB items from export files
     PCollection<String> input = p.apply("ReadItems", TextIO.read().from(inputFiles));
-
 
     // Parse the items into objects
     PCollection<Item> items = input.apply("ParseItems", ParDo.of(new ParseItems()));
 
-
     // Create Cloud Spanner mutations using parsed Item objects
-    PCollection<Mutation> mutations = items.apply("CreateItemMutations", ParDo.of(new CreateItemMutations(options.getTable())));
-
+    PCollection<Mutation> mutations = items.apply("CreateItemMutations",
+        ParDo.of(new CreateItemMutations(options.getTable())));
 
     // (Sink) write the Mutations to Spanner
     mutations.apply("WriteItems", SpannerIO.write()
-          .withInstanceId(options.getInstanceId())
-          .withDatabaseId(options.getDatabaseId()));
+        .withInstanceId(options.getInstanceId())
+        .withDatabaseId(options.getDatabaseId()));
 
     p.run().waitUntilFinish();
 
   }
 
+  // JSON mapping item to object
+  // [START GSON]
+  public static class Item implements Serializable {
 
-    // JSON mapping item to object
-    // [START GSON]
-    public static class Item implements Serializable {
-        private Username Username;
-        private PointsEarned PointsEarned;
-        private Subscribed Subscribed;
-        private ReminderDate ReminderDate;
-        private Zipcode Zipcode;
+    private Username Username;
+    private PointsEarned PointsEarned;
+    private Subscribed Subscribed;
+    private ReminderDate ReminderDate;
+    private Zipcode Zipcode;
 
-    }
+  }
 
-    public static class Username implements Serializable {
-        private String s;
+  public static class Username implements Serializable {
 
-    }
+    private String s;
 
-    public static class PointsEarned implements Serializable {
-        private String n;
+  }
 
-    }
+  public static class PointsEarned implements Serializable {
 
-    public static class Subscribed implements Serializable {
-        private String bOOL;
+    private String n;
 
-    }
+  }
 
-    public static class ReminderDate implements Serializable {
-        private String s;
+  public static class Subscribed implements Serializable {
 
-    }
+    private String bOOL;
 
-    public static class Zipcode implements Serializable {
-        private String n;
+  }
 
-    }
-    // [END GSON]
+  public static class ReminderDate implements Serializable {
 
+    private String s;
 
+  }
+
+  public static class Zipcode implements Serializable {
+
+    private String n;
+
+  }
+  // [END GSON]
 }
