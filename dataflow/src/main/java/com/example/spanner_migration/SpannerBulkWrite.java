@@ -50,7 +50,10 @@ mvn exec:java \
                  --table=my-table \
                  --importBucket=my-import-bucket \
                  --runner=DataflowRunner \
-                 --region=your-gcp-region"
+                 --region=my-gcp-region"
+
+Note: After a successful DynamoDB export to the import bucket,
+the bucket should contain gzip JSON files.
 */
 
 @SuppressWarnings("serial")
@@ -87,7 +90,7 @@ public class SpannerBulkWrite {
 
   }
 
-  static class ParseItems extends DoFn<String, Record> {
+  static class ParseRecords extends DoFn<String, Record> {
 
     @ProcessElement
     public void processElement(ProcessContext c) {
@@ -96,11 +99,11 @@ public class SpannerBulkWrite {
     }
   }
 
-  static class CreateItemMutations extends DoFn<Record, Mutation> {
+  static class CreateRecordMutations extends DoFn<Record, Mutation> {
 
     String table;
 
-    public CreateItemMutations(String table) {
+    public CreateRecordMutations(String table) {
       this.table = table;
     }
 
@@ -152,15 +155,15 @@ public class SpannerBulkWrite {
     PCollection<String> input = p.apply("ReadItems",
         TextIO.read().from(inputFiles).withCompression(GZIP));
 
-    // Parse the items into objects
-    PCollection<Record> items = input.apply("ParseItems", ParDo.of(new ParseItems()));
+    // Parse the DynamoDB items into objects
+    PCollection<Record> records = input.apply("ParseRecords", ParDo.of(new ParseRecords()));
 
-    // Create Cloud Spanner mutations using parsed Item objects
-    PCollection<Mutation> mutations = items.apply("CreateItemMutations",
-        ParDo.of(new CreateItemMutations(options.getTable())));
+    // Create Cloud Spanner mutations using parsed Record objects
+    PCollection<Mutation> mutations = records.apply("CreateRecordMutations",
+        ParDo.of(new CreateRecordMutations(options.getTable())));
 
     // (Sink) write the Mutations to Spanner
-    mutations.apply("WriteItems", SpannerIO.write()
+    mutations.apply("WriteRecords", SpannerIO.write()
         .withInstanceId(options.getInstanceId())
         .withDatabaseId(options.getDatabaseId()));
 

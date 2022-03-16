@@ -57,7 +57,7 @@ mvn exec:java \
                  --experiments=allow_non_updatable_job \
                  --subscription=my-pubsub-subscription
                  --runner=DataflowRunner \
-                 --region=your-gcp-region"
+                 --region=my-gcp-region"
 */
 
 @SuppressWarnings("serial")
@@ -101,7 +101,7 @@ public class SpannerStreamingWrite {
 
   }
 
-  static class UpdateItems extends DoFn<String, Item> {
+  static class CreateUpdateItems extends DoFn<String, Item> {
 
     @ProcessElement
     public void processElement(ProcessContext c) {
@@ -201,7 +201,8 @@ public class SpannerStreamingWrite {
 
     // Choose Update Type
     // create mutations for creates and updates
-    PCollection<Mutation> updates = messages.apply("Create-or-Update?", ParDo.of(new UpdateItems()))
+    PCollection<Mutation> updates = messages.apply("Create-or-Update?",
+            ParDo.of(new CreateUpdateItems()))
         .apply("CU->Mutations", ParDo.of(new UpdateMutations(options.getTable())));
     // create mutations for deletes
     PCollection<Mutation> deletes = messages.apply("Delete?", ParDo.of(new DeleteItems()))
@@ -221,8 +222,7 @@ public class SpannerStreamingWrite {
         .withInstanceId(options.getInstanceId())
         .withDatabaseId(options.getDatabaseId()));
 
-    //p.run().waitUntilFinish(); //needed when running local
-    p.run(); //when using Cloud Dataflow runner
+    p.run().waitUntilFinish();
 
   }
 
