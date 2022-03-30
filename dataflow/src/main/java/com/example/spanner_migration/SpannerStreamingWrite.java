@@ -34,6 +34,7 @@ import org.apache.beam.sdk.options.Validation;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.Flatten;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.windowing.AfterProcessingTime;
 import org.apache.beam.sdk.transforms.windowing.FixedWindows;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.values.PCollection;
@@ -41,7 +42,6 @@ import org.apache.beam.sdk.values.PCollectionList;
 import org.joda.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 
 /*
 ## How to run
@@ -73,7 +73,6 @@ public class SpannerStreamingWrite {
 
     void setInstanceId(String value);
 
-
     @Description("Spanner database name to write to")
     @Validation.Required
     String getDatabaseId();
@@ -86,7 +85,6 @@ public class SpannerStreamingWrite {
 
     void setTable(String value);
 
-
     @Description("Pub/Sub Subscription with streaming changes (full subscription path reqd")
     @Validation.Required
     String getSubscription();
@@ -94,7 +92,7 @@ public class SpannerStreamingWrite {
     void setSubscription(String value);
 
     @Description("How often to process the window (s)")
-    @Default.String("60")
+    @Default.String("10")
     String getWindow();
 
     void setWindow(String value);
@@ -170,7 +168,6 @@ public class SpannerStreamingWrite {
 
   }
 
-
   static class DeleteMutations extends DoFn<Item, Mutation> {
 
     String table;
@@ -195,9 +192,8 @@ public class SpannerStreamingWrite {
     Pipeline p = Pipeline.create(options);
 
     // Streaming pipeline, provide full subscription path
-    PCollection<String> messages = p
-        .apply("Reading from PubSub",
-            PubsubIO.readStrings().fromSubscription(options.getSubscription()));
+    PCollection<String> messages = p.apply("Reading from PubSub",
+        PubsubIO.readStrings().fromSubscription(options.getSubscription()));
 
     // Choose Update Type
     // create mutations for creates and updates
@@ -206,7 +202,8 @@ public class SpannerStreamingWrite {
         .apply("CU->Mutations", ParDo.of(new UpdateMutations(options.getTable())));
     // create mutations for deletes
     PCollection<Mutation> deletes = messages.apply("Delete?", ParDo.of(new DeleteItems()))
-        .apply("D->Mutations", ParDo.of(new DeleteMutations(options.getTable())));
+        .apply("D->Mutations",
+            ParDo.of(new DeleteMutations(options.getTable())));
 
     // Merge both sets of mutations
     PCollectionList<Mutation> merged = PCollectionList.of(updates).and(deletes);
@@ -214,18 +211,22 @@ public class SpannerStreamingWrite {
     // Create fixed windows on unbounded (pub/sub) source
     PCollection<Mutation> mergedWindowed = merged.apply("Merging Mutations",
             Flatten.<Mutation>pCollections())
-        .apply("Creating Windows", Window.<Mutation>into(
-            FixedWindows.of(Duration.standardSeconds(Long.parseLong(options.getWindow())))));
+        .apply("Creating Windows", Window
+            .<Mutation>into(
+                FixedWindows.of(Duration.standardSeconds(Long.parseLong(options.getWindow()))))
+            .triggering(
+                AfterProcessingTime.pastFirstElementInPane()
+                    .plusDelayOf(Duration.standardSeconds(10)))
+            .withAllowedLateness(Duration.standardMinutes(30)).discardingFiredPanes());
 
     // commit changes to Spanner
-    mergedWindowed.apply("Commit->Spanner", SpannerIO.write()
-        .withInstanceId(options.getInstanceId())
-        .withDatabaseId(options.getDatabaseId()));
+    mergedWindowed.apply("Commit->Spanner",
+        SpannerIO.write().withInstanceId(options.getInstanceId())
+            .withDatabaseId(options.getDatabaseId()).withBatchSizeBytes(0));
 
-    p.run().waitUntilFinish();
+    p.run();
 
   }
-
 
   // JSON mapping item to object
   // [START GSON]
@@ -269,6 +270,5 @@ public class SpannerStreamingWrite {
 
   }
   // [END GSON]
-
 
 }
