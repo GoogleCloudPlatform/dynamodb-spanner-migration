@@ -209,6 +209,8 @@ public class SpannerStreamingWrite {
     PCollectionList<Mutation> merged = PCollectionList.of(updates).and(deletes);
 
     // Create fixed windows on unbounded (pub/sub) source
+    // Note: you may want to adjust the delay time and lateness value based
+    //       on your use cases
     PCollection<Mutation> mergedWindowed = merged.apply("Merging Mutations",
             Flatten.<Mutation>pCollections())
         .apply("Creating Windows", Window
@@ -217,7 +219,7 @@ public class SpannerStreamingWrite {
             .triggering(
                 AfterProcessingTime.pastFirstElementInPane()
                     .plusDelayOf(Duration.standardSeconds(10)))
-            .withAllowedLateness(Duration.standardMinutes(30)).discardingFiredPanes());
+            .withAllowedLateness(Duration.standardMinutes(300)).discardingFiredPanes());
 
     // commit changes to Spanner
     mergedWindowed.apply("Commit->Spanner",
