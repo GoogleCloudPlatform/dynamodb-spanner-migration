@@ -39,6 +39,6 @@ def lambda_handler(event, context):
         print(record['eventID'])
         print(record['eventName'])
         print("DynamoDB Record: " + json.dumps(record['dynamodb'], indent=2))
-        future = publisher.publish(topic_path, data=json.dumps(record['dynamodb']))
+        future = publisher.publish(topic_path, data=json.dumps(record['dynamodb']).encode("utf-8"))
         print("Pub/Sub message_id: %s" % future.result())
     return 'Successfully processed {} records.'.format(len(event['Records']))
